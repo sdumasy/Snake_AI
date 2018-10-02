@@ -13,13 +13,40 @@ tl.logging.set_verbosity(tl.logging.DEBUG)
 
 env = Env.Env()
 
-#Create the model
-inputs = tf.placeholder(shape=[None, 11], dtype=tf.float32)
-net = InputLayer(inputs, name='observation')
-net = DenseLayer(net, 120, act=tf.nn.relu,  W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32), name='q_d_s')
-net = DenseLayer(net, 120, act=tf.nn.relu,  W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32), name='q_t_s')
-net = DenseLayer(net, 120, act=tf.nn.relu,  W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32), name='q_e_s')
-net = DenseLayer(net, 3, act=tf.nn.softmax, W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32),  name='q_a_s')
+def create_standard_model():
+    #Create the model
+    inputs = tf.placeholder(shape=[None, 11], dtype=tf.float32)
+    net = InputLayer(inputs, name='observation')
+    net = DenseLayer(net, 120, act=tf.nn.relu,  W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32), name='q_d_s')
+    net = DenseLayer(net, 120, act=tf.nn.relu,  W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32), name='q_t_s')
+    net = DenseLayer(net, 120, act=tf.nn.relu,  W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32), name='q_e_s')
+    net = DenseLayer(net, 3, act=tf.nn.softmax, W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32),  name='q_a_s')
+    return net, inputs
+
+def create_conv_model():
+    #Create the model
+    inputs = tf.placeholder(shape=[None, 22, 22], dtype=tf.float32)
+    net = InputLayer(inputs, name='observation')
+    net = Conv1d(net, 5, 1, act=tf.nn.relu, padding='VALID', name='conv1_1')
+    net = MaxPool1d(net, 2, padding='VALID', name='pool1')
+    net = Conv1d(net, 3, 2, act=tf.nn.relu, padding='VALID', name='conv1_2')
+    net = MaxPool1d(net, 2, padding='VALID', name='pool2')
+    net = FlattenLayer(net, name='flatten')
+    net = DenseLayer(net, 120, act=tf.nn.relu,  W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32), name='q_d_s')
+    net = DenseLayer(net, 120, act=tf.nn.relu,  W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32), name='q_t_s')
+    net = DenseLayer(net, 120, act=tf.nn.relu,  W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32), name='q_e_s')
+    net = DenseLayer(net, 3, act=tf.nn.softmax, W_init=tf.contrib.layers.variance_scaling_initializer(dtype=tf.float32),  name='q_a_s')
+    return net, inputs
+
+conv_model = True
+
+if conv_model:
+    net, inputs = create_conv_model()
+    state_size = 484
+else:
+    net, inputs = create_standard_model()
+    state_size = 11
+
 y = net.outputs
 
 nextQ = tf.placeholder(shape=[None, 3], dtype=tf.float32)
@@ -31,8 +58,9 @@ e = 0.9 #randomness, decays over time
 batch_size = 1000
 
 experiences = np.empty((0, 3), dtype=int)
-init_states = np.empty((0, 11))
-target_states = np.empty((0, 11))
+init_states = np.empty((0, state_size))
+target_states = np.empty((0, state_size))
+
 saver = tf.train.Saver()
 train_new = True
 
@@ -48,14 +76,21 @@ with tf.Session() as sess:
     loss_list = list()
     start_time = time.time()
     for i in range(200):
+
         if len(experiences) > batch_size * 10:
             experiences = experiences[batch_size:]
         j = 0
+
         while(True):
             j += 1
             env.reward = 0
-            s = env.get_features().reshape(1, 11)
-            # s = env.matrix.reshape(22, 22)
+
+            # Reshapes depend on the used model
+            if conv_model:
+                s = env.matrix.reshape(1, 22, 22)
+            else:
+                s = env.get_features().reshape(1, 11)
+
             ## Choose an action by greedily (with e chance of random action) from the Q-network
             # allQ = net.predict(s)
             allQ = sess.run(y, feed_dict={inputs: s})
@@ -67,14 +102,12 @@ with tf.Session() as sess:
             ## Get new state and reward from environments
             r, dead = env.take_action(a)
             ## Obtain the Q' values by feeding the new state through our network
-            s1 = env.get_features().reshape(1, 11)
+            if conv_model:
+                s1 = env.matrix.reshape(1, 22, 22)
+            else:
+                s1 = env.get_features()
             # s1 = env.matrix.reshape(22, 22)
-
             state_vars = np.array([a, r, dead])
-            if j < batch_size:
-                init_states = np.append(init_states, s, axis=0)
-                target_states = np.append(target_states, s1, axis=0)
-                experiences = np.vstack((experiences, np.array([a, r, dead])))
 
             Q1 = sess.run(y, feed_dict={inputs: s1})
             maxQ1 = np.max(Q1)  # in Q-Learning, policy is greedy, so we use "max" to select the next action.
@@ -82,6 +115,12 @@ with tf.Session() as sess:
 
 
             _, losss = sess.run([train_op, loss], {inputs: s, nextQ: allQ})
+
+            if j < batch_size:
+                init_states = np.append(init_states, s.reshape(1, state_size), axis=0)
+                target_states = np.append(target_states, s1.reshape(1, state_size), axis=0)
+                experiences = np.vstack((experiences, np.array([a, r, dead])))
+
             if dead:
                 break
 
@@ -96,6 +135,10 @@ with tf.Session() as sess:
             init_state_sample = init_states[index, :]
             target_state_sample = target_states[index, :]
             experiences_sample = experiences[index, :]
+
+            if conv_model:
+                init_state_sample = init_state_sample.reshape(1000, 22, 22)
+                target_state_sample = target_state_sample.reshape(1000, 22, 22)
 
 
             targetQ = sess.run([y], feed_dict={inputs: init_state_sample})

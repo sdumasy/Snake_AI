@@ -13,7 +13,7 @@ class Env():
     def __init__(self):
         """Initialize the environment, set the visualisation boolean, set the size of the field,
         set the block size and screen resolution"""
-        self.visualize = False
+        self.visualize = True
         self.field_size = 22
         if self.visualize:
             pygame.init()
@@ -33,6 +33,7 @@ class Env():
         if self.visualize:
             pygame.draw.circle(self.screen, (0, 0, 0), (self.matrix_to_game_dims(self.snake.elements[-1][0]), self.matrix_to_game_dims(self.snake.elements[-1][1])), int(self.block_size / 2))
         self.update_matrix(self.snake.elements[-1], 0)
+        self.reward -= 1
 
         self.snake.move(direction)
 
@@ -74,7 +75,7 @@ class Env():
         """Check if the snakes hits itself or a wall, if so,
         reduce reward and die"""
         if (self.check_matrix(self.snake.get_pos()) == 1) or (self.check_matrix(self.snake.get_pos()) == 2):
-            self.reward = self.reward - 10
+            self.reward -= 50
             return True
         return False
 
@@ -83,7 +84,7 @@ class Env():
         add a reward """
         if self.check_matrix(self.snake.get_pos()) == 5:
             self.score += 1
-            self.reward = self.reward + 10
+            self.reward += 50
             self.snake.elements.append(self.snake.elements[-1])
             self.create_bug(self.get_free_pos())
 
